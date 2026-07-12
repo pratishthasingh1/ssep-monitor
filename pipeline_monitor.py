@@ -40,6 +40,7 @@ import logging
 import argparse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus, urlparse, parse_qs
 import xml.etree.ElementTree as ET
@@ -153,6 +154,25 @@ def save_state(state):
 
 def item_id(url, title):
     return hashlib.sha256(f"{url}|{title}".encode("utf-8")).hexdigest()
+
+
+def parse_item_date(date_str):
+    # Sources report dates in different formats (RFC 822 for News RSS,
+    # ISO 8601 for everything else) or leave it blank (FERC.gov,
+    # Appalachian Voices). Normalize to an aware datetime so items sort
+    # correctly, with unparseable/blank dates sinking to the bottom.
+    if not date_str:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    try:
+        dt = parsedate_to_datetime(date_str)
+    except (TypeError, ValueError):
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.min.replace(tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def legiscan_due(state):
@@ -479,8 +499,8 @@ def send_email(new_items):
             f"  {item['date']} - {item['source']}\n"
         )
         html_rows.append(
-            f"<li><b>[{item['category']}]</b> "
-            f"<a href='{item['url']}'>{item['title']}</a>"
+            f"<li><b>[{item['category']}] {item['title']}</b><br>"
+            f"<a href='{item['url']}'>{item['url']}</a>"
             f"<br><small>{item['date']} &middot; {item['source']}</small></li>"
         )
 
@@ -540,6 +560,7 @@ def run_once():
     log.info(f"Checked {len(all_items)} items total across all sources, {len(new_items)} are new")
 
     if new_items:
+        new_items.sort(key=lambda item: parse_item_date(item.get("date", "")), reverse=True)
         send_email(new_items)
     else:
         log.info("No new items this run")
