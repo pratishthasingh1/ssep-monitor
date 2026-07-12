@@ -42,6 +42,6 @@ jobs:
         run: |
           git config user.name "ssep-monitor-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add state.json monitor.log
+          git add state.json
           git diff --quiet --cached || git commit -m "Update monitor state [skip ci]"
           git push
