@@ -122,6 +122,13 @@ NEWS_QUERIES = [
     "Davidson County North Carolina pipeline Transco",
 ]
 
+# Search results (Google/Bing News especially) can surface an old article
+# for the first time on a later poll -- re-indexing, ranking shifts, a page
+# getting crawled late. That's "new to the bot" but not actually current
+# news, so anything older than this many days is recorded as seen but not
+# emailed.
+STALE_CUTOFF_DAYS = 7
+
 HEADERS = {"User-Agent": "Mozilla/5.0 (SSEP-Monitor/3.0; personal research tool)"}
 REQUEST_TIMEOUT = 20
 
@@ -173,6 +180,16 @@ def parse_item_date(date_str):
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def is_stale(item):
+    date_str = item.get("date", "")
+    if not date_str:
+        return False  # unknown date (FERC.gov, Appalachian Voices) -- can't judge age, so don't filter
+    dt = parse_item_date(date_str)
+    if dt == datetime.min.replace(tzinfo=timezone.utc):
+        return False  # unparseable -- don't filter
+    return (datetime.now(timezone.utc) - dt) > timedelta(days=STALE_CUTOFF_DAYS)
 
 
 def legiscan_due(state):
@@ -549,15 +566,23 @@ def run_once():
         log.info("LegiScan poll not due yet -- skipping this run to conserve free quota")
 
     new_items = []
+    stale_count = 0
     for item in all_items:
         if not item.get("url"):
             continue
         iid = item_id(item["url"], item["title"])
         if iid not in seen:
             seen.add(iid)
+            if is_stale(item):
+                stale_count += 1
+                continue
             new_items.append(item)
 
-    log.info(f"Checked {len(all_items)} items total across all sources, {len(new_items)} are new")
+    log.info(
+        f"Checked {len(all_items)} items total across all sources, "
+        f"{len(new_items)} are new ({stale_count} skipped as stale, "
+        f"older than {STALE_CUTOFF_DAYS} days)"
+    )
 
     if new_items:
         new_items.sort(key=lambda item: parse_item_date(item.get("date", "")), reverse=True)
