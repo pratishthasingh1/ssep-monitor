@@ -41,7 +41,7 @@ import argparse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse, parse_qs
 import xml.etree.ElementTree as ET
 
 import requests
@@ -194,6 +194,18 @@ def fetch_google_news(query):
 # SOURCE: Bing News RSS
 # ----------------------------------------------------------------------------
 
+def _unwrap_bing_link(link):
+    # Bing's apiclick.aspx redirect wraps the real article URL in a "url="
+    # param alongside a random "tid" that changes on every single fetch --
+    # dedupe against the wrapper URL and every article looks new forever.
+    parsed = urlparse(link)
+    if parsed.netloc.endswith("bing.com") and parsed.path.endswith("apiclick.aspx"):
+        real_url = parse_qs(parsed.query).get("url", [None])[0]
+        if real_url:
+            return real_url
+    return link
+
+
 def fetch_bing_news(query):
     url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=RSS"
     items = []
@@ -203,7 +215,7 @@ def fetch_bing_news(query):
         root = ET.fromstring(resp.content)
         for entry in root.findall(".//item"):
             title = (entry.findtext("title") or "").strip()
-            link = (entry.findtext("link") or "").strip()
+            link = _unwrap_bing_link((entry.findtext("link") or "").strip())
             pub_date = (entry.findtext("pubDate") or "").strip()
             if title and link:
                 items.append({
