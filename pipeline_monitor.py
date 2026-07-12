@@ -59,11 +59,11 @@ FERC_DOCKET = "CP25-10-000"
 FERC_REHEARING_DOCKET = "CP25-10-001"
 
 # --- Email (required) --------------------------------------------------
-SMTP_HOST = os.environ.get("SSEP_SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SSEP_SMTP_PORT", "587"))
+SMTP_HOST = os.environ.get("SSEP_SMTP_HOST") or "smtp.gmail.com"
+SMTP_PORT = int(os.environ.get("SSEP_SMTP_PORT") or "587")
 SMTP_USER = os.environ.get("SSEP_SMTP_USER")
 SMTP_PASS = os.environ.get("SSEP_SMTP_PASS")
-EMAIL_TO = os.environ.get("SSEP_EMAIL_TO", SMTP_USER)
+EMAIL_TO = os.environ.get("SSEP_EMAIL_TO") or SMTP_USER
 
 # --- CourtListener (optional but recommended -- free account) ----------
 COURTLISTENER_TOKEN = os.environ.get("SSEP_COURTLISTENER_TOKEN")
