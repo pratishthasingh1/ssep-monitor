@@ -125,9 +125,15 @@ NEWS_QUERIES = [
 # Search results (Google/Bing News especially) can surface an old article
 # for the first time on a later poll -- re-indexing, ranking shifts, a page
 # getting crawled late. That's "new to the bot" but not actually current
-# news, so anything older than this many days is recorded as seen but not
-# emailed.
-STALE_CUTOFF_DAYS = 7
+# news, so only items dated today (UTC) get emailed; everything else is
+# recorded as seen but skipped.
+#
+# Dedup memory (which URLs have already been recorded) is kept for this
+# many days and then pruned, so state.json doesn't grow forever. This is
+# safe even though it's longer than the "today only" email window: if a
+# pruned URL resurfaces later, is_stale() will just exclude it from the
+# email again anyway.
+SEEN_RETENTION_DAYS = 7
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (SSEP-Monitor/3.0; personal research tool)"}
 REQUEST_TIMEOUT = 20
@@ -150,13 +156,35 @@ log = logging.getLogger("ssep-monitor")
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    return {"seen_ids": [], "legiscan_last_run": None}
+            state = json.load(f)
+    else:
+        state = {}
+    if "seen" not in state:
+        # Migrate from the old flat seen_ids list (or start fresh).
+        # Stamp existing entries as seen "now" so they get a full
+        # SEEN_RETENTION_DAYS window instead of expiring immediately.
+        now_iso = datetime.now(timezone.utc).isoformat()
+        state["seen"] = {h: now_iso for h in state.pop("seen_ids", [])}
+    state.setdefault("legiscan_last_run", None)
+    return state
 
 
 def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
+
+
+def prune_seen(seen):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=SEEN_RETENTION_DAYS)
+    kept = {}
+    for iid, first_seen in seen.items():
+        try:
+            dt = datetime.fromisoformat(first_seen)
+        except ValueError:
+            continue
+        if dt >= cutoff:
+            kept[iid] = first_seen
+    return kept
 
 
 def item_id(url, title):
@@ -183,13 +211,22 @@ def parse_item_date(date_str):
 
 
 def is_stale(item):
+    # Only the News tier (Google/Bing) re-surfaces old articles on later
+    # polls -- re-indexing, ranking shifts. Official/legal sources
+    # (LegiScan, CourtListener, Federal Register, FERC.gov) are low-volume
+    # and their date reflects an official action, not a search ranking, so
+    # filtering them by date risks silently losing something legitimate
+    # just because it wasn't caught same-day as the underlying event (e.g.
+    # LegiScan's 6-hour poll cadence, or a weekend/holiday reporting lag).
+    if not item.get("category", "").startswith("News:"):
+        return False
     date_str = item.get("date", "")
     if not date_str:
-        return False  # unknown date (FERC.gov, Appalachian Voices) -- can't judge age, so don't filter
+        return False  # unknown date -- can't judge age, so don't filter
     dt = parse_item_date(date_str)
     if dt == datetime.min.replace(tzinfo=timezone.utc):
         return False  # unparseable -- don't filter
-    return (datetime.now(timezone.utc) - dt) > timedelta(days=STALE_CUTOFF_DAYS)
+    return dt.date() != datetime.now(timezone.utc).date()
 
 
 def legiscan_due(state):
@@ -545,7 +582,7 @@ def send_email(new_items):
 def run_once():
     log.info("Starting SSEP monitor run")
     state = load_state()
-    seen = set(state.get("seen_ids", []))
+    seen = state["seen"]  # hash -> first-seen ISO timestamp
 
     all_items = []
     for q in NEWS_QUERIES:
@@ -567,12 +604,13 @@ def run_once():
 
     new_items = []
     stale_count = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
     for item in all_items:
         if not item.get("url"):
             continue
         iid = item_id(item["url"], item["title"])
         if iid not in seen:
-            seen.add(iid)
+            seen[iid] = now_iso
             if is_stale(item):
                 stale_count += 1
                 continue
@@ -580,8 +618,7 @@ def run_once():
 
     log.info(
         f"Checked {len(all_items)} items total across all sources, "
-        f"{len(new_items)} are new ({stale_count} skipped as stale, "
-        f"older than {STALE_CUTOFF_DAYS} days)"
+        f"{len(new_items)} are new ({stale_count} skipped as stale news)"
     )
 
     if new_items:
@@ -590,10 +627,10 @@ def run_once():
     else:
         log.info("No new items this run")
 
-    state["seen_ids"] = list(seen)
-    state["last_run"] = datetime.now(timezone.utc).isoformat()
+    state["seen"] = prune_seen(seen)
+    state["last_run"] = now_iso
     if ran_legiscan:
-        state["legiscan_last_run"] = datetime.now(timezone.utc).isoformat()
+        state["legiscan_last_run"] = now_iso
     save_state(state)
 
 
