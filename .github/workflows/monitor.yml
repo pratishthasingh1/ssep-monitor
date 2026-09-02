@@ -1,11 +1,6 @@
 name: SSEP Pipeline Monitor
 
 on:
-  schedule:
-    # Runs every 15 minutes. GitHub's scheduler is best-effort and can lag
-    # a few minutes under load, but this is the practical floor for free
-    # Actions cron -- see README.md if you want to understand the tradeoffs.
-    - cron: "*/15 * * * *"
   workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
 
 jobs:
